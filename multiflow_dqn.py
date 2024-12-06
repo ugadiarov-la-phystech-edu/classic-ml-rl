@@ -15,6 +15,7 @@ import torch
 
 import wandb
 
+from skmultiflow.meta import AdaptiveRandomForestRegressor
 from skmultiflow.trees import HoeffdingTreeRegressor, HoeffdingAdaptiveTreeRegressor
 from skmultiflow.lazy import KNNRegressor
 
@@ -179,7 +180,7 @@ if __name__ == '__main__':
     parser.add_argument('--env_id', required=True, type=str)
     args = parser.parse_args()
     cls = None
-    for module in ["skmultiflow.trees", "skmultiflow.lazy"]:
+    for module in ["skmultiflow.trees", "skmultiflow.lazy", "skmultiflow.meta"]:
         try:
             cls = getattr(importlib.import_module(module), args.cls)
         except Exception:
@@ -227,6 +228,9 @@ if __name__ == '__main__':
 
     # kwargs = {'grace_period': BATCH_SIZE} if 'Hoeffding' in args.cls else {}
     kwargs = {}
+    if 'RandomForest' in args.cls:
+        kwargs['n_estimators'] = 100
+
     rfq = RFQ(cls, n_actions, **kwargs)
     target_rfq = rfq
     memory = ReplayMemory(BUFFER_SIZE)
