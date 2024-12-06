@@ -1,7 +1,5 @@
 import argparse
 import copy
-import importlib
-import traceback
 
 import gym
 import random
@@ -15,8 +13,7 @@ import torch
 
 import wandb
 
-from skmultiflow.trees import HoeffdingTreeRegressor, HoeffdingAdaptiveTreeRegressor
-from skmultiflow.lazy import KNNRegressor
+from sklearn.ensemble import RandomForestRegressor
 
 import catch
 
@@ -50,8 +47,7 @@ class FlattenWrapper(gym.ObservationWrapper):
 
 
 class RFQ:
-    def __init__(self, cls, n_actions, **rf_kwargs):
-        self.cls = cls
+    def __init__(self, n_actions, **rf_kwargs):
         self.kwargs = rf_kwargs
         self.n_actions = n_actions
         self.rf_regressor = None
@@ -72,13 +68,9 @@ class RFQ:
     def value(self, state):
         return np.max(self._q_values(state), axis=-1)
 
-    def train(self, state_action, q_value, init=False):
-        if init:
-            assert self.rf_regressor is None
-            self.rf_regressor = self.cls(**self.kwargs)
-            return self.rf_regressor.fit(state_action, q_value)
-        else:
-            return self.rf_regressor.partial_fit(state_action, q_value)
+    def train(self, state_action, q_value):
+        self.rf_regressor = RandomForestRegressor(**self.kwargs)
+        return self.rf_regressor.fit(state_action, q_value)
 
 
 Transition = namedtuple('Transition',
@@ -143,11 +135,8 @@ def select_action(state, rfq, steps_done, total_timesteps, eps_start, eps_end, e
     return torch.as_tensor(action, device=device, dtype=torch.int64)
 
 
-def optimize_model(rfq, target_rfq, buffer, batch_size, gamma, init=False):
-    if init:
-        transitions = buffer.get_data()
-    else:
-        transitions = buffer.sample(batch_size)
+def optimize_model(rfq, target_rfq, buffer, batch_size, gamma):
+    transitions = buffer.get_data()
     batch = Transition(*zip(*transitions))
 
     # Compute a mask of non-final states and concatenate the batch elements
@@ -170,24 +159,13 @@ def optimize_model(rfq, target_rfq, buffer, batch_size, gamma, init=False):
         next_state_values[non_final_mask] = target_rfq.value(non_final_next_states)
     # Compute the expected Q values
     expected_state_action_values = (next_state_values * gamma) + reward_batch
-    rfq.train(np.concatenate([state_batch, action_batch], axis=-1), expected_state_action_values, init=init)
+    rfq.train(np.concatenate([state_batch, action_batch], axis=-1), expected_state_action_values)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cls', type=str, required=True)
     parser.add_argument('--env_id', required=True, type=str)
     args = parser.parse_args()
-    cls = None
-    for module in ["skmultiflow.trees", "skmultiflow.lazy"]:
-        try:
-            cls = getattr(importlib.import_module(module), args.cls)
-        except Exception:
-            print(traceback.format_exc())
-
-    if cls is None:
-        raise ValueError(f'Cannot find class by name: {args.cls}')
-
 
     # CartPole-v1
     # BATCH_SIZE = 128
@@ -225,9 +203,7 @@ if __name__ == '__main__':
     # Get the number of state observations
     state = env.reset()
 
-    # kwargs = {'grace_period': BATCH_SIZE} if 'Hoeffding' in args.cls else {}
-    kwargs = {}
-    rfq = RFQ(cls, n_actions, **kwargs)
+    rfq = RFQ(n_actions, n_jobs=-1)
     target_rfq = rfq
     memory = ReplayMemory(BUFFER_SIZE)
 
@@ -236,7 +212,7 @@ if __name__ == '__main__':
     episode_durations = []
     episode_return_history = []
 
-    run = wandb.init(project=env_id, group=args.cls, config=kwargs, sync_tensorboard=True, monitor_gym=True,)
+    run = wandb.init(project=env_id, group='RandomForest', name='run-0', sync_tensorboard=True, monitor_gym=True,)
 
     while steps_done < TOTAL_TIMESTEPS:
         # Initialize the environment and get its state
@@ -260,9 +236,9 @@ if __name__ == '__main__':
             # Move to the next state
             state = next_state
 
-            if steps_done >= TRAINING_STARTS and steps_done % TRAIN_FREQ == 0:
+            if steps_done > TRAINING_STARTS and steps_done % TRAIN_FREQ == 0:
                 # Perform one step of the optimization (on the policy network)
-                optimize_model(rfq, target_rfq, memory, BATCH_SIZE, GAMMA, init=steps_done == TRAINING_STARTS)
+                optimize_model(rfq, target_rfq, memory, BATCH_SIZE, GAMMA)
                 if target_rfq.rf_regressor is None:
                     target_rfq = copy.deepcopy(rfq)
 
@@ -275,7 +251,7 @@ if __name__ == '__main__':
                 num_episodes += 1
                 episode_durations.append(t + 1)
                 # plot_metric(episode_durations)
-                # plot_metric(episode_return_history)
+                plot_metric(episode_return_history)
                 wandb.log({'global_step': steps_done, 'rollout/ep_len_mean': np.mean(episode_durations[-100:]),
                            'rollout/ep_rew_mean': np.mean(episode_return_history[-100:]), 'time/episodes': num_episodes})
                 break
