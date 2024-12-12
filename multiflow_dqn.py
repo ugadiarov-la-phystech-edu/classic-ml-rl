@@ -1,6 +1,9 @@
 import argparse
+import collections
 import copy
 import importlib
+import os
+import pickle
 import traceback
 
 import gym
@@ -50,15 +53,15 @@ class FlattenWrapper(gym.ObservationWrapper):
         return observation.reshape(-1)
 
 
-class RFQ:
-    def __init__(self, cls, n_actions, **rf_kwargs):
+class QCritic:
+    def __init__(self, cls, n_actions, **model_kwargs):
         self.cls = cls
-        self.kwargs = rf_kwargs
+        self.kwargs = model_kwargs
         self.n_actions = n_actions
-        self.rf_regressor = None
+        self.model = None
 
     def q_value(self, state_action):
-        return self.rf_regressor.predict(state_action)
+        return self.model.predict(state_action)
 
     def _q_values(self, state):
         state_action = np.stack(
@@ -75,11 +78,11 @@ class RFQ:
 
     def train(self, state_action, q_value, init=False):
         if init:
-            assert self.rf_regressor is None
-            self.rf_regressor = self.cls(**self.kwargs)
-            return self.rf_regressor.fit(state_action, q_value)
+            assert self.model is None
+            self.model = self.cls(**self.kwargs)
+            return self.model.fit(state_action, q_value)
         else:
-            return self.rf_regressor.partial_fit(state_action, q_value)
+            return self.model.partial_fit(state_action, q_value)
 
 
 Transition = namedtuple('Transition',
@@ -130,21 +133,17 @@ def plot_metric(metric_history, show_result=False):
             display.display(plt.gcf())
 
 
-def select_action(state, rfq, steps_done, total_timesteps, eps_start, eps_end, exploration_fraction):
+def select_action(state, q_critic, exploration_epsilon):
     sample = random.random()
-    eps_threshold = eps_end
-    if steps_done <= exploration_fraction * total_timesteps:
-        eps_threshold = eps_start - steps_done / total_timesteps / exploration_fraction * (eps_start - eps_end)
-
-    if sample > eps_threshold and rfq.rf_regressor is not None:
-        action = rfq.act(state)[np.newaxis]
+    if sample > exploration_epsilon and q_critic.model is not None:
+        action = q_critic.act(state)[np.newaxis]
     else:
         action = np.full((1, 1), fill_value=env.action_space.sample(), dtype=np.int64)
 
     return torch.as_tensor(action, device=device, dtype=torch.int64)
 
 
-def optimize_model(rfq, target_rfq, buffer, batch_size, gamma, init=False):
+def optimize_model(q_critic, target_q_critic, buffer, batch_size, gamma, init=False):
     if init:
         transitions = buffer.get_data()
     else:
@@ -167,55 +166,53 @@ def optimize_model(rfq, target_rfq, buffer, batch_size, gamma, init=False):
     # This is merged based on the mask, such that we'll have either the expected
     # state value or 0 in case the state was final.
     next_state_values = np.zeros((state_batch.shape[0],), dtype=np.float32)
-    if target_rfq.rf_regressor is not None:
-        next_state_values[non_final_mask] = target_rfq.value(non_final_next_states)
+    if target_q_critic.model is not None:
+        next_state_values[non_final_mask] = target_q_critic.value(non_final_next_states)
     # Compute the expected Q values
     expected_state_action_values = (next_state_values * gamma) + reward_batch
-    rfq.train(np.concatenate([state_batch, action_batch], axis=-1), expected_state_action_values, init=init)
+    q_critic.train(np.concatenate([state_batch, action_batch], axis=-1), expected_state_action_values, init=init)
+
+
+def epsilon_schedule(eps_start, eps_end, eps_decay_steps, step):
+    if step >= eps_decay_steps:
+        return eps_end
+
+    return eps_start + (eps_end - eps_start) * step / eps_decay_steps
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cls', type=str, required=True)
     parser.add_argument('--env_id', required=True, type=str)
+    parser.add_argument('--exploration_eps_start', type=float, default=1.0)
+    parser.add_argument('--exploration_eps_end', type=float, default=0.05)
+    parser.add_argument('--exploration_decay_steps', type=int, default=5000)
+    parser.add_argument('--save_every_steps', type=int, default=5000)
+    parser.add_argument('--log_every_steps', type=int, default=1000)
+    parser.add_argument('--wandb_project', type=str, required=True)
+    parser.add_argument('--wandb_group', type=str, required=True)
+    parser.add_argument('--wandb_run_name', type=str, required=True)
+    parser.add_argument('--save_path', type=str, required=True)
+    parser.add_argument('--buffer_size', type=int, default=1000)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--target_update_interval', type=int, default=100)
     args = parser.parse_args()
     cls = None
     for module in ["skmultiflow.trees", "skmultiflow.lazy", "skmultiflow.meta"]:
         try:
             cls = getattr(importlib.import_module(module), args.cls)
+            break
         except Exception:
             print(traceback.format_exc())
 
     if cls is None:
         raise ValueError(f'Cannot find class by name: {args.cls}')
 
-
-    # CartPole-v1
-    # BATCH_SIZE = 128
-    # GAMMA = 0.99
-    # EPS_START = 0.9
-    # EPS_END = 0.05
-    # EXPLORATION_FRACTION = 1.0
-    # TAU = 0.005
-    # LR = 1e-4
-    # BUFFER_SIZE = 10000
-    # TRAINING_STARTS = 5000
-    # TOTAL_TIMESTEPS = 20000
-    # TRAIN_FREQ = 1
-
-    # env = gym.make("CartPole-v1")
-
-
-    BATCH_SIZE = 32
-    GAMMA = 0.99
-    EPS_START = 1
-    EPS_END = 0.05
-    EXPLORATION_FRACTION = 0.35
-    TARGET_UPDATE_INTERVAL = 100
-    LR = 1e-3
-    BUFFER_SIZE = 1000
+    batch_size = args.batch_size
+    gamma = 0.99
+    target_update_interval = args.target_update_interval
+    buffer_size = args.buffer_size
     TRAINING_STARTS = 500
-    TOTAL_TIMESTEPS = 20000
     TRAIN_FREQ = 1
 
     env_id = args.env_id
@@ -231,24 +228,28 @@ if __name__ == '__main__':
     if 'RandomForest' in args.cls:
         kwargs['n_estimators'] = 100
 
-    rfq = RFQ(cls, n_actions, **kwargs)
-    target_rfq = rfq
-    memory = ReplayMemory(BUFFER_SIZE)
+    q_critic = QCritic(cls, n_actions, **kwargs)
+    target_q_critic = q_critic
+    memory = ReplayMemory(buffer_size)
 
     steps_done = 0
     num_episodes = 0
-    episode_durations = []
-    episode_return_history = []
+    next_save_step = args.save_every_steps
+    next_log_step = args.log_every_steps
+    episode_durations = collections.deque(maxlen=100)
+    episode_return_history = collections.deque(maxlen=100)
+    run = wandb.init(project=args.wandb_project, group=args.wandb_group, name=args.wandb_run_name, config=kwargs,
+                     sync_tensorboard=True, monitor_gym=True, )
 
-    run = wandb.init(project=env_id, group=args.cls, config=kwargs, sync_tensorboard=True, monitor_gym=True,)
-
-    while steps_done < TOTAL_TIMESTEPS:
+    while True:
         # Initialize the environment and get its state
         state = env.reset()
         state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
         episode_return = 0
         for t in count():
-            action = select_action(state.numpy(), rfq, steps_done, TOTAL_TIMESTEPS, EPS_START, EPS_END, EXPLORATION_FRACTION)
+            epsilon = epsilon_schedule(args.exploration_eps_start, args.exploration_eps_end,
+                                       args.exploration_decay_steps, steps_done)
+            action = select_action(state.numpy(), q_critic, epsilon)
             observation, reward, done, _ = env.step(action.item())
             steps_done += 1
             episode_return += reward
@@ -265,27 +266,27 @@ if __name__ == '__main__':
             state = next_state
 
             if steps_done >= TRAINING_STARTS and steps_done % TRAIN_FREQ == 0:
-                # Perform one step of the optimization (on the policy network)
-                optimize_model(rfq, target_rfq, memory, BATCH_SIZE, GAMMA, init=steps_done == TRAINING_STARTS)
-                if target_rfq.rf_regressor is None:
-                    target_rfq = copy.deepcopy(rfq)
+                # Perform one step of the optimization
+                optimize_model(q_critic, target_q_critic, memory, batch_size, gamma, init=steps_done == TRAINING_STARTS)
+                if target_q_critic.model is None:
+                    target_q_critic = copy.deepcopy(q_critic)
 
-            if steps_done % TARGET_UPDATE_INTERVAL == 0:
-                target_rfq = copy.deepcopy(rfq)
+            if steps_done % target_update_interval == 0:
+                target_q_critic = copy.deepcopy(q_critic)
+
+            if steps_done >= next_save_step:
+                next_save_step += args.save_every_steps
+                with open(os.path.join(args.save_path, 'model.pkl'), 'wb') as file_obj:
+                    pickle.dump(q_critic, file_obj)
+
+            if steps_done >= next_log_step:
+                next_log_step += args.log_every_steps
+                wandb.log({'global_step': steps_done, 'rollout/ep_len_mean': np.mean(episode_durations),
+                           'rollout/ep_rew_mean': np.mean(episode_return_history), 'time/episodes': num_episodes})
 
             if done:
                 episode_return_history.append(episode_return)
                 episode_return = 0
                 num_episodes += 1
                 episode_durations.append(t + 1)
-                # plot_metric(episode_durations)
-                # plot_metric(episode_return_history)
-                wandb.log({'global_step': steps_done, 'rollout/ep_len_mean': np.mean(episode_durations[-100:]),
-                           'rollout/ep_rew_mean': np.mean(episode_return_history[-100:]), 'time/episodes': num_episodes})
                 break
-
-    print('Complete')
-    # plot_metric(episode_durations, show_result=True)
-    # plot_metric(episode_return_history, show_result=True)
-    # plt.ioff()
-    # plt.show()
