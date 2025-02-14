@@ -276,6 +276,7 @@ if __name__ == '__main__':
 
             if steps_done >= next_save_step:
                 next_save_step += args.save_every_steps
+                os.makedirs(args.save_path, exist_ok=True)
                 with open(os.path.join(args.save_path, 'model.pkl'), 'wb') as file_obj:
                     pickle.dump(q_critic, file_obj)
 
