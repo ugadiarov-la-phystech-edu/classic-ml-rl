@@ -18,12 +18,8 @@ import torch
 
 import wandb
 
-from skmultiflow.meta import AdaptiveRandomForestRegressor
-from skmultiflow.trees import HoeffdingTreeRegressor, HoeffdingAdaptiveTreeRegressor
-from skmultiflow.lazy import KNNRegressor
-
-import catch
-
+from envs import catch, boulder, roadrunner, study, memory_corridor, tamagotchi, golf, supermarket, trashbot
+from envs.wrappers import FlattenWrapper, StepWrapper, FrameStackWrapper
 
 # set up matplotlib
 is_ipython = 'inline' in matplotlib.get_backend()
@@ -39,18 +35,6 @@ device = torch.device(
     "cpu"
 )
 device = 'cpu'
-
-
-class FlattenWrapper(gym.ObservationWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.observation_space = gym.spaces.Box(low=env.observation_space.low.reshape(-1),
-                                                high=env.observation_space.high.reshape(-1),
-                                                shape=(np.prod(np.array(env.observation_space.shape)),),
-                                                dtype=env.observation_space.dtype)
-
-    def observation(self, observation):
-        return observation.reshape(-1)
 
 
 class QCritic:
@@ -196,6 +180,11 @@ if __name__ == '__main__':
     parser.add_argument('--buffer_size', type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--target_update_interval', type=int, default=100)
+    parser.add_argument('--frame_stack', type=int, default=1)
+    parser.add_argument('--training_starts', type=int, default=500)
+    parser.add_argument('--train_freq', type=int, default=1)
+    parser.add_argument('--optimization_steps', type=int, default=1)
+    parser.add_argument('--reinit_interval', type=int, default=500)
     args = parser.parse_args()
     cls = None
     for module in ["skmultiflow.trees", "skmultiflow.lazy", "skmultiflow.meta"]:
@@ -211,12 +200,18 @@ if __name__ == '__main__':
     batch_size = args.batch_size
     gamma = 0.99
     target_update_interval = args.target_update_interval
+    reinit_interval = args.reinit_interval
     buffer_size = args.buffer_size
-    TRAINING_STARTS = 500
-    TRAIN_FREQ = 1
+    training_starts = args.training_starts
+    train_freq = args.train_freq
+    optimization_steps = args.optimization_steps
 
     env_id = args.env_id
     env = FlattenWrapper(gym.make(env_id))
+    if args.frame_stack > 1:
+        env = FrameStackWrapper(env, n_frames=args.frame_stack)
+
+    env = StepWrapper(env)
 
     # Get number of actions from gym action space
     n_actions = env.action_space.n
@@ -241,6 +236,7 @@ if __name__ == '__main__':
     run = wandb.init(project=args.wandb_project, group=args.wandb_group, name=args.wandb_run_name, config=kwargs,
                      sync_tensorboard=True, monitor_gym=True, )
 
+    init = True
     while True:
         # Initialize the environment and get its state
         state = env.reset()
@@ -265,9 +261,12 @@ if __name__ == '__main__':
             # Move to the next state
             state = next_state
 
-            if steps_done >= TRAINING_STARTS and steps_done % TRAIN_FREQ == 0:
-                # Perform one step of the optimization
-                optimize_model(q_critic, target_q_critic, memory, batch_size, gamma, init=steps_done == TRAINING_STARTS)
+            if steps_done >= training_starts and steps_done % train_freq == 0:
+                # Perform optimization
+                for _ in range(optimization_steps):
+                    optimize_model(q_critic, target_q_critic, memory, batch_size, gamma, init=init)
+                    init = False
+
                 if target_q_critic.model is None:
                     target_q_critic = copy.deepcopy(q_critic)
 
@@ -278,6 +277,11 @@ if __name__ == '__main__':
                 next_save_step += args.save_every_steps
                 with open(os.path.join(args.save_path, 'model.pkl'), 'wb') as file_obj:
                     pickle.dump(q_critic, file_obj)
+
+            if steps_done % reinit_interval == 0:
+                q_critic = QCritic(cls, n_actions, **kwargs)
+                optimize_model(q_critic, target_q_critic, memory, batch_size, gamma, init=True)
+
 
             if steps_done >= next_log_step:
                 next_log_step += args.log_every_steps

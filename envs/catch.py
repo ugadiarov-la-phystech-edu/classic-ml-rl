@@ -296,37 +296,37 @@ class Catch(gym.Env):
 
 gym.register(
     id="Catch-v0",
-    entry_point="catch:Catch",
+    entry_point="envs.catch:Catch",
     kwargs={},
 )
 
 gym.register(
     id="Catch-vectorized-v0",
-    entry_point="catch:Catch",
+    entry_point="envs.catch:Catch",
     kwargs={"observation_type": OBSERVATION_TYPE_MINIMAL},
 )
 
 gym.register(
     id="Catch-color-v0",
-    entry_point="catch:Catch",
+    entry_point="envs.catch:Catch",
     kwargs={"observation_type": OBSERVATION_TYPE_DEFAULT_WITH_COLORS},
 )
 
 gym.register(
     id="Catch-onehot-v0",
-    entry_point="catch:Catch",
+    entry_point="envs.catch:Catch",
     kwargs={"observation_type": OBSERVATION_TYPE_DEFAULT_ONEHOT},
 )
 
 for size in range(2, 9):
     gym.register(
         id=f"Catch-{size}-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={"rows": 10 * size, "columns": 5 * size},
     )
     gym.register(
         id=f"Catch-{size}-vectorized-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={
             "observation_type": OBSERVATION_TYPE_MINIMAL,
             "rows": 10 * size,
@@ -335,7 +335,7 @@ for size in range(2, 9):
     )
     gym.register(
         id=f"Catch-{size}-color-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={
             "observation_type": OBSERVATION_TYPE_DEFAULT_WITH_COLORS,
             "rows": 10 * size,
@@ -344,7 +344,7 @@ for size in range(2, 9):
     )
     gym.register(
         id=f"Catch-{size}-onehot-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={
             "observation_type": OBSERVATION_TYPE_DEFAULT_ONEHOT,
             "rows": 10 * size,
@@ -356,12 +356,12 @@ for size in range(2, 9):
 for size in range(2, 21):
     gym.register(
         id=f"Catch-{size}x{size}-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={"rows": size, "columns": size},
     )
     gym.register(
         id=f"Catch-{size}x{size}-vectorized-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={
             "observation_type": OBSERVATION_TYPE_MINIMAL,
             "rows": size,
@@ -370,7 +370,7 @@ for size in range(2, 21):
     )
     gym.register(
         id=f"Catch-{size}x{size}-color-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={
             "observation_type": OBSERVATION_TYPE_DEFAULT_WITH_COLORS,
             "rows": size,
@@ -379,7 +379,7 @@ for size in range(2, 21):
     )
     gym.register(
         id=f"Catch-{size}x{size}-onehot-v0",
-        entry_point="catch:Catch",
+        entry_point="envs.catch:Catch",
         kwargs={
             "observation_type": OBSERVATION_TYPE_DEFAULT_ONEHOT,
             "rows": size,
