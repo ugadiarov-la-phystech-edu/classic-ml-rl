@@ -2,6 +2,7 @@ import argparse
 import collections
 import copy
 import importlib
+import math
 import os
 import pickle
 import traceback
@@ -184,7 +185,7 @@ if __name__ == '__main__':
     parser.add_argument('--training_starts', type=int, default=500)
     parser.add_argument('--train_freq', type=int, default=1)
     parser.add_argument('--optimization_steps', type=int, default=1)
-    parser.add_argument('--reinit_interval', type=int, default=500)
+    parser.add_argument('--reinit_interval', type=int, default=math.inf)
     args = parser.parse_args()
     cls = None
     for module in ["skmultiflow.trees", "skmultiflow.lazy", "skmultiflow.meta"]:
