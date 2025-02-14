@@ -280,7 +280,7 @@ if __name__ == '__main__':
                 with open(os.path.join(args.save_path, 'model.pkl'), 'wb') as file_obj:
                     pickle.dump(q_critic, file_obj)
 
-            if steps_done % reinit_interval == 0:
+            if steps_done > training_starts and steps_done % reinit_interval == 0:
                 q_critic = QCritic(cls, n_actions, **kwargs)
                 optimize_model(q_critic, target_q_critic, memory, batch_size, gamma, init=True)
 
